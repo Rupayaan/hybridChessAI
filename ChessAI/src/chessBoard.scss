@@ -1,0 +1,44 @@
+.board{
+    width:520px;
+    aspect-ratio: 1;
+    display:grid;
+    grid-template-columns:repeat(8,1fr);
+    border:4px solid #333;
+}
+.square{
+    position:relative;
+   overflow: hidden;
+
+}
+.white{
+    background-color:#f0d9b5;
+    font-size:0.7rem;
+}
+.black{
+    background-color:#b58863;
+    font-size: 0.7rem;
+}
+.piece{
+    width:80%;
+    height:80%;
+    object-fit:contain;
+    cursor:grab;
+    top:50%;
+    left:50%;
+    transform:translate(-50%,-50%);
+    position:absolute;
+}
+.rank-label,.file-label{
+    position:absolute;
+    font-size:0.7rem;
+    opacity:0.65;
+    font-weight:600;
+}
+.rank-label{
+    top:3px;
+    left:4px;
+}
+.file-label{
+    bottom:3px;
+    right:4px;
+}
