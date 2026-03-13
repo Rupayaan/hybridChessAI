@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { GameMode, GameState, TimeControl } from "./types";
 import { TIME_CONTROLS } from "./types";
 import "./Dashboard.scss";
-
+const API_BASE = import.meta.env.VITE_API_URL || "";
 interface DashboardProps {
   onStartGame: (mode: GameMode, timeControl: TimeControl, roomData?: { roomId: string; roomCode: string; color: string }) => void;
 }
@@ -60,7 +60,7 @@ export default function Dashboard({ onStartGame }: DashboardProps) {
     setIsLoading(true);
     setOnlineError("");
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/create-room", {
+      const res = await fetch(`${API_BASE}/api/create-room`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -92,7 +92,7 @@ export default function Dashboard({ onStartGame }: DashboardProps) {
     setIsLoading(true);
     setOnlineError("");
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/join-room", {
+      const res = await fetch(`${API_BASE}/api/join-room`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ room_code: joinCode.trim().toUpperCase() }),
