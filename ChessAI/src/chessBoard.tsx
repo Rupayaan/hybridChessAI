@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { GameMode, TimeControl, RoomData } from "./types";
+import { useChessAudio } from "./useChessAudio";
 import "./chessBoard.scss";
 
 type Piece = {
@@ -42,14 +43,18 @@ export default function ChessBoard({
   const [forfeitWinner, setForfeitWinner] = useState<string | null>(null);
   const [boardHistory, setBoardHistory] = useState<(Piece | null)[][][]>([]);
   const [viewingIndex, setViewingIndex] = useState<number>(-1);
-
+  const [showGameOverDialog, setShowGameOverDialog] = useState(false);
+  const [lastMoveSquares, setLastMoveSquares] = useState<{
+    from: { row: number; col: number };
+    to: { row: number; col: number };
+  } | null>(null);
   const [myColor, setMyColor] = useState<"white" | "black">(
     (roomData?.color as "white" | "black") || "white"
   );
   const onlineRoomCode = roomData?.roomCode || "";
   const wsRef = useRef<WebSocket | null>(null);
   const botThinkingRef = useRef(false);
-
+  const { playMove, playCapture, startTicking, stopTicking } = useChessAudio();
   // Inactivity tracking
   const [inactivityTimeout, setInactivityTimeout] = useState<number>(0);
   const [inactivityRemaining, setInactivityRemaining] = useState<number | null>(null);
@@ -119,29 +124,49 @@ export default function ChessBoard({
           }
           break;
 
-        case "move_made":
-          setBoard(data.board);
-          setTurn(data.turn);
-          setGameStatus(data.status);
-          setLastMoveNotation(data.lastMove);
-          setCapturedByWhite(data.capturedByWhite || []);
-          setCapturedByBlack(data.capturedByBlack || []);
-          setSelected(null);
-          setLegalMoves([]);
-          setBoardHistory((prev) => [...prev, data.board.map((row: (Piece | null)[]) => [...row])]);
-          setViewingIndex(-1);
-          // Reset inactivity on every move
-          lastMoveTimeRef.current = Date.now();
-          setInactivityRemaining(null);
-          if (data.increment && data.increment > 0) {
-            const moverColor = data.turn === "white" ? "black" : "white";
-            if (moverColor === "white") {
-              setWhiteTime((prev) => prev + data.increment);
+          case "move_made": {
+            // Detect capture by comparing captured arrays
+            const prevWC = capturedByWhite.length;
+            const prevBC = capturedByBlack.length;
+            const newWC = (data.capturedByWhite || []).length;
+            const newBC = (data.capturedByBlack || []).length;
+  
+            if (newWC > prevWC || newBC > prevBC) {
+              playCapture();
             } else {
-              setBlackTime((prev) => prev + data.increment);
+              playMove();
             }
+  
+            setBoard(data.board);
+            setTurn(data.turn);
+            setGameStatus(data.status);
+            setLastMoveNotation(data.lastMove);
+            setCapturedByWhite(data.capturedByWhite || []);
+            setCapturedByBlack(data.capturedByBlack || []);
+            setSelected(null);
+            setLegalMoves([]);
+            setBoardHistory((prev) => [...prev, data.board.map((row: (Piece | null)[]) => [...row])]);
+            setViewingIndex(-1);
+            // Track last move squares for highlighting
+            if (data.from && data.to) {
+              setLastMoveSquares({
+                from: { row: data.from[0], col: data.from[1] },
+                to: { row: data.to[0], col: data.to[1] },
+              });
+            }
+            // Reset inactivity on every move
+            lastMoveTimeRef.current = Date.now();
+            setInactivityRemaining(null);
+            if (data.increment && data.increment > 0) {
+              const moverColor = data.turn === "white" ? "black" : "white";
+              if (moverColor === "white") {
+                setWhiteTime((prev) => prev + data.increment);
+              } else {
+                setBlackTime((prev) => prev + data.increment);
+              }
+            }
+            break;
           }
-          break;
 
         case "game_over":
           if (data.board) setBoard(data.board);
@@ -231,6 +256,7 @@ export default function ChessBoard({
         setCapturedByBlack([]);
         setShowForfeitDialog(false);
         setForfeitWinner(null);
+        setLastMoveSquares(null);
         setBoardHistory([data.board.map((row: (Piece | null)[]) => [...row])]);
         setViewingIndex(-1);
         setGameReady(true);
@@ -246,7 +272,9 @@ export default function ChessBoard({
     if (!gameReady) return;
     if (isGameOver()) return;
     if (gameStatus === "waiting") return;
-    if (botThinking) return;
+
+    // Disable timer entirely in bot mode — untimed play
+    if (gameMode === "bot") return;
 
     const interval = setInterval(() => {
       if (turn === "white") {
@@ -256,6 +284,7 @@ export default function ChessBoard({
               wsRef.current.send(JSON.stringify({ type: "timeout", winner: "black" }));
             }
             setGameStatus("timeout");
+            setForfeitWinner("Black");
             return 0;
           }
           return prev - 1;
@@ -267,6 +296,7 @@ export default function ChessBoard({
               wsRef.current.send(JSON.stringify({ type: "timeout", winner: "white" }));
             }
             setGameStatus("timeout");
+            setForfeitWinner("White");
             return 0;
           }
           return prev - 1;
@@ -275,7 +305,48 @@ export default function ChessBoard({
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [turn, gameStatus, gameReady, botThinking, gameMode]);
+  }, [turn, gameStatus, gameReady, gameMode]);
+  useEffect(() => {
+    // Disable in bot mode (timers are disabled)
+    if (gameMode === "bot") {
+      stopTicking();
+      return;
+    }
+
+    if (!gameReady || isGameOver() || gameStatus === "waiting") {
+      stopTicking();
+      return;
+    }
+
+    const LOW_TIME_THRESHOLD = 20;
+    let shouldTick = false;
+
+    if (gameMode === "online") {
+      // Only tick when it's YOUR turn and YOUR clock is low
+      const myTime = myColor === "white" ? whiteTime : blackTime;
+      if (turn === myColor && myTime <= LOW_TIME_THRESHOLD && myTime > 0) {
+        shouldTick = true;
+      }
+    } else {
+      // Local mode: tick for whoever's turn it is
+      const activeTime = turn === "white" ? whiteTime : blackTime;
+      if (activeTime <= LOW_TIME_THRESHOLD && activeTime > 0) {
+        shouldTick = true;
+      }
+    }
+
+    if (shouldTick) {
+      startTicking();
+    } else {
+      stopTicking();
+    }
+  }, [whiteTime, blackTime, turn, gameMode, myColor, gameStatus, gameReady]);
+
+  // Stop ticking on unmount
+  useEffect(() => {
+    return () => stopTicking();
+  }, [stopTicking]);
+
 
   // ---- Bot Move ----
   useEffect(() => {
@@ -290,15 +361,26 @@ export default function ChessBoard({
 
     const timeout = setTimeout(async () => {
       try {
+        const prevWhiteCaptures = capturedByWhite.length;
+        const prevBlackCaptures = capturedByBlack.length;
+
         const res = await fetch(`${API_BASE}/api/bot-move`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
         });
         const data = await res.json();
-        applyServerResponse(data);
-        if (timeControl.increment > 0) {
-          setBlackTime((prev) => prev + timeControl.increment);
+
+        // Play sound based on whether bot captured a piece
+        const newWhiteCaptures = (data.capturedByWhite || []).length;
+        const newBlackCaptures = (data.capturedByBlack || []).length;
+        if (newWhiteCaptures > prevWhiteCaptures || newBlackCaptures > prevBlackCaptures) {
+          playCapture();
+        } else {
+          playMove();
         }
+
+        applyServerResponse(data);
+        // No timer logic — bot mode is untimed
       } catch (error) {
         console.error("Bot move failed:", error);
       } finally {
@@ -312,7 +394,7 @@ export default function ChessBoard({
       botThinkingRef.current = false;
       setBotThinking(false);
     };
-  }, [turn, gameMode, gameStatus, gameReady, timeControl.increment]);
+  }, [turn, gameMode, gameStatus, gameReady]);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const applyServerResponse = (data: any) => {
@@ -322,6 +404,14 @@ export default function ChessBoard({
     if (data.lastMove !== undefined) setLastMoveNotation(data.lastMove);
     if (data.capturedByWhite) setCapturedByWhite(data.capturedByWhite);
     if (data.capturedByBlack) setCapturedByBlack(data.capturedByBlack);
+
+    // Track last move squares for highlighting
+    if (data.from && data.to) {
+      setLastMoveSquares({
+        from: { row: data.from[0], col: data.from[1] },
+        to: { row: data.to[0], col: data.to[1] },
+      });
+    }
 
     setBoardHistory((prev) => [...prev, data.board.map((row: (Piece | null)[]) => [...row])]);
     setViewingIndex(-1);
@@ -367,7 +457,16 @@ export default function ChessBoard({
       setLegalMoves([]);
     }
   }, [roomData]);
+  useEffect(() => {
+    if (isGameOver()) {
+      // Delay showing the dialog so players can process what happened
+      const delay = setTimeout(() => {
+        setShowGameOverDialog(true);
+      }, 1000); // 2.5 second delay
 
+      return () => clearTimeout(delay);
+    }
+  }, [gameStatus]);
   const movePiece = useCallback(
     async (row: number, col: number) => {
       if (!selected) return;
@@ -387,6 +486,15 @@ export default function ChessBoard({
         return;
       }
 
+      // Check if this is a capture BEFORE sending the move
+      const targetPiece = board[row]?.[col];
+      const movingPiece = board[selected.row]?.[selected.col];
+      const isEnPassant =
+        movingPiece?.type === "pawn" &&
+        selected.col !== col &&
+        !targetPiece;
+      const isCapture = !!targetPiece || isEnPassant;
+
       try {
         const res = await fetch(`${API_BASE}/api/move`, {
           method: "POST",
@@ -403,6 +511,14 @@ export default function ChessBoard({
           console.error(data);
           return;
         }
+
+        // Play appropriate sound
+        if (isCapture) {
+          playCapture();
+        } else {
+          playMove();
+        }
+
         setSelected(null);
         setLegalMoves([]);
         applyServerResponse(data);
@@ -418,7 +534,7 @@ export default function ChessBoard({
         console.error("Move failed:", error);
       }
     },
-    [selected, timeControl.increment, gameMode]
+    [selected, timeControl.increment, gameMode, board, playMove, playCapture]
   );
 
   const handleSquareClick = (displayRow: number, displayCol: number) => {
@@ -456,6 +572,7 @@ export default function ChessBoard({
   };
 
   const handleBackClick = () => {
+    // If game is over, go directly to dashboard (no forfeit needed)
     if (isGameOver()) {
       if (gameMode === "online" && wsRef.current) {
         wsRef.current.close();
@@ -720,13 +837,21 @@ export default function ChessBoard({
         </div>
       )}
 
-      {isGameOver() && !showForfeitDialog && (
+      {isGameOver() && showGameOverDialog && !showForfeitDialog && (
         <div className="gameover-overlay">
           <div className="gameover-dialog">
+            <button
+              className="gameover-close"
+              onClick={() => setShowGameOverDialog(false)}
+              title="Close and review game"
+            >
+              ✕
+            </button>
             <div className="gameover-icon">
               {gameStatus === "checkmate" ? "♚" : gameStatus === "stalemate" ? "🤝" : gameStatus === "timeout" ? "⏰" : "🏳️"}
             </div>
             <h3>{getStatusText()}</h3>
+            <p className="gameover-hint">Close to review moves</p>
             <button className="gameover-exit" onClick={handleExitAfterGameOver}>Back to Dashboard</button>
           </div>
         </div>
@@ -742,7 +867,7 @@ export default function ChessBoard({
           {gameMode === "online" && (
             <span className="room-code-badge">Room: {onlineRoomCode}</span>
           )}
-          <span className="time-control-label">{timeControl.label}</span>
+          <span className="time-control-label">{gameMode === "bot" ? "Untimed" : timeControl.label}</span>
           {gameMode === "online" && (
             <span className="my-color-badge">You: {myColor}</span>
           )}
@@ -754,12 +879,12 @@ export default function ChessBoard({
         <div className="player-bar-top">
           <div className="player-bar-info">
             <span className="player-bar-label">
-              {topLabel} {topIsYou ? "(You)" : ""}
+              {topLabel} {topIsYou ? "(You)" : gameMode === "bot" ? "(Bot)" : ""}
             </span>
             <span className="player-bar-status">{getTopStatusText()}</span>
           </div>
-          <div className={`player-bar-timer ${turn === topColor && !isGameOver() ? "active" : ""}`}>
-            {formatTime(topTime)}
+          <div className={`player-bar-timer ${turn === topColor && !isGameOver() ? "active" : ""} ${gameMode === "bot" ? "timer-disabled" : ""}`}>
+            {gameMode === "bot" ? "∞" : formatTime(topTime)}
           </div>
         </div>
         <div className="player-bar-captured">
@@ -802,11 +927,13 @@ export default function ChessBoard({
                 const isLegalMove = !isViewingHistory && legalMoves.some((m) => m.row === realRow && m.col === realCol);
                 const isCapture = isLegalMove && piece !== null;
                 const kingHighlight = getSquareHighlight(realRow, realCol);
-
+                const isLastMoveFrom = !isViewingHistory && lastMoveSquares?.from.row === realRow && lastMoveSquares?.from.col === realCol;
+                const isLastMoveTo = !isViewingHistory && lastMoveSquares?.to.row === realRow && lastMoveSquares?.to.col === realCol;
+                const lastMoveClass = isLastMoveFrom ? " last-move-from" : isLastMoveTo ? " last-move-to" : "";
                 return (
                   <div
                     key={`${displayRowIndex}-${displayColIndex}`}
-                    className={`square ${isLight ? "light" : "dark"} ${isSelected ? "selected" : ""} ${isLegalMove ? "highlight" : ""}${kingHighlight}`}
+                    className={`square ${isLight ? "light" : "dark"} ${isSelected ? "selected" : ""} ${isLegalMove ? "highlight" : ""}${kingHighlight}${lastMoveClass}`}
                     onClick={() => handleSquareClick(displayRowIndex, displayColIndex)}
                   >
                     {piece && (
@@ -846,8 +973,8 @@ export default function ChessBoard({
             </span>
             <span className="player-bar-status">{getBottomStatusText()}</span>
           </div>
-          <div className={`player-bar-timer ${turn === bottomColor && !isGameOver() ? "active" : ""}`}>
-            {formatTime(bottomTime)}
+          <div className={`player-bar-timer ${turn === bottomColor && !isGameOver() ? "active" : ""} ${gameMode === "bot" ? "timer-disabled" : ""}`}>
+            {gameMode === "bot" ? "∞" : formatTime(bottomTime)}
           </div>
         </div>
         <div className="player-bar-captured">
@@ -859,13 +986,23 @@ export default function ChessBoard({
 
       {/* ---- Mobile Button Island ---- */}
       <div className="button-island">
-        <button
-          className="island-btn forfeit-btn"
-          onClick={handleBackClick}
-          title="Forfeit"
-        >
-          🏳️
-        </button>
+        {isGameOver() ? (
+          <button
+            className="island-btn exit-btn"
+            onClick={handleExitAfterGameOver}
+            title="Back to Dashboard"
+          >
+            ←
+          </button>
+        ) : (
+          <button
+            className="island-btn forfeit-btn"
+            onClick={handleBackClick}
+            title="Forfeit"
+          >
+            🏳️
+          </button>
+        )}
 
         <div className="island-center">
           <button className="island-btn disabled" title="More options">
