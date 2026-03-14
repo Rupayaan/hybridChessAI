@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { GameMode, GameState, TimeControl } from "./types";
 import { TIME_CONTROLS } from "./types";
 import "./Dashboard.scss";
+import logo from "../public/chess-logo.png"
 
 const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
@@ -152,7 +153,14 @@ export default function Dashboard({ onStartGame }: DashboardProps) {
     return (
       <div className="dashboard">
         <div className="dashboard-container">
-          <h1 className="dashboard-title">♟️ Hybrid Chess AI</h1>
+        <img 
+  src={logo} 
+  width="300" 
+  height="300" 
+  style={{ marginTop: "-40px", marginBottom: "-40px" }} 
+  alt="logo" 
+/>
+          <h1 className="dashboard-title"> Hybrid Chess AI</h1>
           <p className="dashboard-subtitle">Select Game Mode</p>
           <div className="mode-selection">
             <button className="mode-card mode-card--bot" onClick={() => handleModeSelect("bot")}>
