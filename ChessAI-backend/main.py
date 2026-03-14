@@ -7,18 +7,74 @@ from room_manager import room_manager, GameRoom
 from moves import get_piece_color
 from rules import filter_legal_moves, is_king_in_check, is_pawn_promotion, is_en_passant, is_castling
 from bot import bot_move
+from contextlib import asynccontextmanager
+import asyncio
 import json
 import os
 
-app = FastAPI()
+# ---- Background task: inactivity checker ----
+async def inactivity_checker():
+    """Periodically check for inactive/stale rooms and abort them."""
+    while True:
+        await asyncio.sleep(15)  # Check every 15 seconds
+        try:
+            # Abort inactive game rooms
+            inactive_ids = room_manager.get_inactive_rooms()
+            for room_id in inactive_ids:
+                room = room_manager.get_room(room_id)
+                if room:
+                    if room.status == "waiting":
+                        room.status = "aborted"
+                        await room.broadcast({
+                            "type": "game_over",
+                            "reason": "abort",
+                            "winner": None,
+                            "message": "Room closed — no opponent joined in time.",
+                        })
+                    elif room.status in ("playing", "check"):
+                        # The player whose turn it is gets aborted
+                        inactive_color = room.turn
+                        winner = "black" if inactive_color == "white" else "white"
+                        room.status = "aborted"
+                        await room.broadcast({
+                            "type": "game_over",
+                            "reason": "inactivity",
+                            "winner": winner,
+                            "message": f"{inactive_color.capitalize()} ran out of activity time. {winner.capitalize()} wins!",
+                            "board": board_to_frontend(room.board),
+                            "capturedByWhite": captured_to_frontend(room.captured_by_white),
+                            "capturedByBlack": captured_to_frontend(room.captured_by_black),
+                        })
 
-# CORS — allow both local dev and production origins
+            # Cleanup finished rooms with no players
+            finished_ids = room_manager.get_finished_rooms()
+            for room_id in finished_ids:
+                room_manager.cleanup_room(room_id)
+
+        except Exception as e:
+            print(f"Inactivity checker error: {e}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    task = asyncio.create_task(inactivity_checker())
+    yield
+    # Shutdown
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+app = FastAPI(lifespan=lifespan)
+
+# CORS
 ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 ]
-
-# Add production frontend URL from env var if set
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "")
 if FRONTEND_URL:
     ALLOWED_ORIGINS.append(FRONTEND_URL)
@@ -63,6 +119,7 @@ FILES = ["a", "b", "c", "d", "e", "f", "g", "h"]
 class CreateRoomRequest(BaseModel):
     minutes: int
     increment: int
+    color: str = "white"  # "white", "black", or "random"
 
 class JoinRoomRequest(BaseModel):
     room_code: str
@@ -126,7 +183,6 @@ def to_algebraic(from_row, from_col, to_row, to_col, piece, captured,
                  is_ep=False, is_castle=False, promotion=None,
                  board_state=None, color=None,
                  ctx_last_move=None, ctx_castling_rights=None):
-    """Generate algebraic notation for a move. Uses explicit context args."""
     if is_castle:
         if to_col == 6:
             return "O-O"
@@ -172,7 +228,6 @@ def to_algebraic(from_row, from_col, to_row, to_col, piece, captured,
     return notation
 
 def check_game_status_ctx(b, color, ctx_last_move, ctx_castling_rights):
-    """Check game status using explicit context (not globals)."""
     in_check = is_king_in_check(b, color)
     has_legal_moves = False
 
@@ -196,7 +251,6 @@ def check_game_status_ctx(b, color, ctx_last_move, ctx_castling_rights):
     return "playing"
 
 def update_castling_rights_on(rights, piece, from_row, from_col, color):
-    """Update castling rights dict in place."""
     if piece.lower() == "k":
         if color == "white":
             rights["white_kingside"] = False
@@ -215,7 +269,6 @@ def update_castling_rights_on(rights, piece, from_row, from_col, color):
             rights["black_kingside"] = False
 
 def update_castling_rights_on_capture(rights, captured, to_row, to_col):
-    """Update castling rights when a rook is captured."""
     if captured and captured.lower() == "r":
         if to_row == 7 and to_col == 7:
             rights["white_kingside"] = False
@@ -230,11 +283,6 @@ def execute_move_on_board(b, from_row, from_col, to_row, to_col,
                           color, ctx_last_move, ctx_castling_rights,
                           ctx_captured_white, ctx_captured_black,
                           promotion=None):
-    """
-    Execute a move on any board with explicit state.
-    Returns (notation, new_last_move).
-    Mutates b, ctx_castling_rights, ctx_captured_white, ctx_captured_black in place.
-    """
     piece = b[from_row][from_col]
     captured = b[to_row][to_col]
     is_ep = is_en_passant(b, from_row, from_col, to_row, to_col, ctx_last_move)
@@ -371,10 +419,17 @@ def bot_play():
 
 @app.post("/api/create-room")
 def create_room(req: CreateRoomRequest):
-    room_id, room_code = room_manager.create_room(req.minutes, req.increment)
+    # Validate color choice
+    color_choice = req.color.lower()
+    if color_choice not in ("white", "black", "random"):
+        color_choice = "white"
+
+    room_id, room_code = room_manager.create_room(req.minutes, req.increment, color_choice)
+    room = room_manager.get_room(room_id)
     return {
         "room_id": room_id,
         "room_code": room_code,
+        "creator_color": room.creator_color,
         "message": f"Share code '{room_code}' with your opponent",
     }
 
@@ -390,11 +445,11 @@ def join_room(req: JoinRoomRequest):
         "room_code": req.room_code,
         "time_minutes": room.time_minutes,
         "increment": room.increment,
+        "joiner_color": room.joiner_color,
     }
 
 @app.post("/api/room/legal-moves")
 def get_room_legal_moves(req: RoomPositionRequest):
-    """Room-aware legal moves endpoint for online mode."""
     room = room_manager.get_room(req.room_id)
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
@@ -433,15 +488,19 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
         "board": board_to_frontend(room.board),
         "time_minutes": room.time_minutes,
         "increment": room.increment,
+        "inactivity_timeout": room.inactivity_timeout,
     })
 
     if room.is_full():
+        room.status = "playing"
+        room.touch_activity()
         await room.broadcast({
             "type": "game_start",
             "board": board_to_frontend(room.board),
             "turn": room.turn,
             "white_time": room.white_time,
             "black_time": room.black_time,
+            "inactivity_timeout": room.inactivity_timeout,
         })
 
     try:
@@ -454,7 +513,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 await handle_online_move(room, websocket, data)
 
             elif msg_type == "forfeit":
-                if room.status == "playing":
+                if room.status in ("playing", "check"):
                     room.status = "forfeit"
                     winner = "black" if color == "white" else "white"
                     await room.broadcast({
@@ -472,7 +531,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 room.black_time = data.get("black_time", room.black_time)
 
             elif msg_type == "timeout":
-                if room.status == "playing":
+                if room.status in ("playing", "check"):
                     winner = data.get("winner", "unknown")
                     room.status = "timeout"
                     await room.broadcast({
@@ -490,7 +549,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
 
 
 async def handle_online_move(room: GameRoom, ws: WebSocket, data: dict):
-    """Process a move in an online game using shared execute logic."""
     color = room.get_player_color(ws)
 
     if color != room.turn:
@@ -516,7 +574,9 @@ async def handle_online_move(room: GameRoom, ws: WebSocket, data: dict):
         await room.send_to(ws, {"type": "error", "message": "Illegal move"})
         return
 
-    # Use the shared execute function
+    # Touch activity on valid move
+    room.touch_activity()
+
     notation, new_last_move = execute_move_on_board(
         room.board, from_row, from_col, to_row, to_col,
         color, room.last_move, room.castling_rights,
@@ -549,12 +609,12 @@ async def handle_online_move(room: GameRoom, ws: WebSocket, data: dict):
 
     await room.broadcast(response)
 
+
 # ---- Serve frontend static files in production ----
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 if os.path.isdir(STATIC_DIR):
-    # Serve assets first
     app.mount("/assets", StaticFiles(directory=os.path.join(STATIC_DIR, "assets")), name="assets")
-    # Serve remaining static files and SPA fallback
+
     from fastapi.responses import FileResponse
 
     @app.get("/{full_path:path}")
