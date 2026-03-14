@@ -1,20 +1,28 @@
-from typing import Tuple, Optional
-from rules import filter_legal_moves
-from moves import get_piece_color
-import random
+"""
+Bot move selection — uses the Hybrid AI (classical + neural network).
+Falls back to classical engine if neural weights aren't available.
+"""
 
-def bot_move(board, color: str, last_move=None, castling_rights=None) -> Optional[Tuple[int, int, int, int]]:
-    all_moves = []
-    for row in range(8):
-        for col in range(8):
-            piece = board[row][col]
-            if piece and get_piece_color(piece) == color:
-                legal_moves = filter_legal_moves(board, row, col, color, last_move, castling_rights)
-                for move in legal_moves:
-                    all_moves.append((row, col, move[0], move[1]))
+from hybrid_ai import hybrid_best_move
+from engine import engine_best_move
 
-    if not all_moves:
+
+def bot_move(board, color, last_move, castling_rights):
+    """
+    Get the best move for the bot using the hybrid AI.
+    Returns (from_row, from_col, to_row, to_col) or None.
+    """
+    try:
+        move, score = hybrid_best_move(board, color, last_move, castling_rights, depth=3)
+        if move:
+            return move
+    except Exception as e:
+        print(f"Hybrid AI error: {e}, falling back to classical engine")
+
+    # Fallback to pure classical engine
+    try:
+        move, score = engine_best_move(board, color, last_move, castling_rights, depth=3)
+        return move
+    except Exception as e:
+        print(f"Classical engine error: {e}")
         return None
-
-    # Simple bot: pick a random legal move instead of always the first
-    return random.choice(all_moves)
