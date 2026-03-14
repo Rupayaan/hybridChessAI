@@ -47,8 +47,8 @@ class GameRoom:
         # Inactivity tracking
         self.last_activity_time: float = time.time()
         self.created_at: float = time.time()
-        # Inactivity timeout: base of 2 minutes per side-minute, clamped between 60s and 600s
-        # e.g., 1 min game -> 120s, 3 min -> 360s capped at 600s, 10 min -> 600s
+    # Inactivity timeout: 30 seconds per game-minute, clamped between 30s and 180s
+        # e.g., 1 min game -> 30s, 3 min -> 90s, 5 min -> 150s, 10+ min -> 180s (cap)
         raw_timeout = time_minutes * 30
         self.inactivity_timeout: float = max(30.0, min(raw_timeout, 180.0))
         # Waiting timeout: how long to wait for opponent before auto-abort (5 minutes)

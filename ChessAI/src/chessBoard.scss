@@ -162,7 +162,116 @@ $rank-label-width: 20px;
     box-shadow: 0 0 8px rgba(76, 175, 80, 0.3);
   }
 }
+.inactivity-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  margin: 0.25rem 0;
+  animation: inactivity-breathe 2.5s ease-in-out infinite;
 
+  .inactivity-icon {
+    font-size: 1rem;
+    flex-shrink: 0;
+  }
+
+  .inactivity-text {
+    text-align: center;
+    line-height: 1.3;
+
+    strong {
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+  }
+}
+
+// Opponent stalling — amber/orange tone
+.inactivity-opponent {
+  background: rgba(255, 152, 0, 0.12);
+  border: 1px solid rgba(255, 152, 0, 0.35);
+  color: #ffb74d;
+
+  strong {
+    color: #ffa726;
+  }
+}
+
+// You are stalling — red/urgent tone
+.inactivity-self {
+  background: rgba(244, 67, 54, 0.12);
+  border: 1px solid rgba(244, 67, 54, 0.4);
+  color: #ef9a9a;
+
+  strong {
+    color: #f44336;
+  }
+}
+
+@keyframes inactivity-breathe {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(0.995);
+    box-shadow: 0 0 12px rgba(255, 152, 0, 0.15);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+// Self warning gets a more urgent red glow
+.inactivity-self {
+  @keyframes inactivity-breathe-urgent {
+    0% {
+      opacity: 1;
+      transform: scale(1);
+      box-shadow: 0 0 0 0 transparent;
+    }
+    50% {
+      opacity: 0.65;
+      transform: scale(0.995);
+      box-shadow: 0 0 14px rgba(244, 67, 54, 0.2);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+      box-shadow: 0 0 0 0 transparent;
+    }
+  }
+  animation: inactivity-breathe-urgent 1.8s ease-in-out infinite;
+}
+
+// Responsive
+@media (max-width: 768px) {
+  .inactivity-status {
+    font-size: 0.7rem;
+    padding: 0.3rem 0.5rem;
+    gap: 0.35rem;
+
+    .inactivity-icon {
+      font-size: 0.85rem;
+    }
+  }
+}
+
+@media (max-width: 480px) {
+  .inactivity-status {
+    font-size: 0.65rem;
+    padding: 0.25rem 0.4rem;
+    border-radius: 6px;
+  }
+}
 // ---- Board Area ----
 .board-area {
   display: flex;

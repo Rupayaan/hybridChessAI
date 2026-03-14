@@ -50,6 +50,12 @@ export default function ChessBoard({
   const wsRef = useRef<WebSocket | null>(null);
   const botThinkingRef = useRef(false);
 
+  // Inactivity tracking
+  const [inactivityTimeout, setInactivityTimeout] = useState<number>(0);
+  const [inactivityRemaining, setInactivityRemaining] = useState<number | null>(null);
+  const lastMoveTimeRef = useRef<number>(Date.now());
+  const INACTIVITY_WARNING_DELAY = 30; // Show warning after 30s of no moves
+
   // Board orientation: flip when playing as black in online mode
   const isFlipped = gameMode === "online" && myColor === "black";
 
@@ -89,6 +95,9 @@ export default function ChessBoard({
         case "connected":
           setMyColor(data.color);
           setBoard(data.board);
+          if (data.inactivity_timeout) {
+            setInactivityTimeout(data.inactivity_timeout);
+          }
           if (data.color === "white") {
             setGameStatus("waiting");
           }
@@ -103,6 +112,11 @@ export default function ChessBoard({
           setGameReady(true);
           setBoardHistory([data.board.map((row: (Piece | null)[]) => [...row])]);
           setViewingIndex(-1);
+          lastMoveTimeRef.current = Date.now();
+          setInactivityRemaining(null);
+          if (data.inactivity_timeout) {
+            setInactivityTimeout(data.inactivity_timeout);
+          }
           break;
 
         case "move_made":
@@ -116,6 +130,9 @@ export default function ChessBoard({
           setLegalMoves([]);
           setBoardHistory((prev) => [...prev, data.board.map((row: (Piece | null)[]) => [...row])]);
           setViewingIndex(-1);
+          // Reset inactivity on every move
+          lastMoveTimeRef.current = Date.now();
+          setInactivityRemaining(null);
           if (data.increment && data.increment > 0) {
             const moverColor = data.turn === "white" ? "black" : "white";
             if (moverColor === "white") {
@@ -144,6 +161,7 @@ export default function ChessBoard({
           if (data.lastMove) setLastMoveNotation(data.lastMove);
           if (data.capturedByWhite) setCapturedByWhite(data.capturedByWhite);
           if (data.capturedByBlack) setCapturedByBlack(data.capturedByBlack);
+          setInactivityRemaining(null);
           break;
 
         case "error":
@@ -165,6 +183,29 @@ export default function ChessBoard({
       wsRef.current = null;
     };
   }, [gameMode, roomData]);
+
+  // ---- Inactivity countdown (online only) ----
+  useEffect(() => {
+    if (gameMode !== "online") return;
+    if (!gameReady) return;
+    if (isGameOver()) return;
+    if (gameStatus === "waiting") return;
+    if (inactivityTimeout <= 0) return;
+
+    const interval = setInterval(() => {
+      const elapsedSeconds = (Date.now() - lastMoveTimeRef.current) / 1000;
+      const remaining = Math.max(0, inactivityTimeout - elapsedSeconds);
+
+      // Only show warning after INACTIVITY_WARNING_DELAY seconds of no moves
+      if (elapsedSeconds >= INACTIVITY_WARNING_DELAY && remaining > 0) {
+        setInactivityRemaining(Math.ceil(remaining));
+      } else {
+        setInactivityRemaining(null);
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [gameMode, gameReady, gameStatus, inactivityTimeout]);
 
   // ---- Bot/Local Mode: Initialize ----
   useEffect(() => {
@@ -485,6 +526,15 @@ export default function ChessBoard({
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
+  const formatInactivityTime = (seconds: number): string => {
+    if (seconds >= 60) {
+      const mins = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+    }
+    return `${seconds}s`;
+  };
+
   const getStatusText = () => {
     switch (gameStatus) {
       case "checkmate":
@@ -600,8 +650,6 @@ export default function ChessBoard({
   };
 
   // ---- Determine top/bottom player based on orientation ----
-  // Bottom player = "you" in online, white in bot/local
-  // Top player = opponent
   const bottomColor: "white" | "black" = isFlipped ? "black" : "white";
   const topColor: "white" | "black" = isFlipped ? "white" : "black";
 
@@ -619,6 +667,11 @@ export default function ChessBoard({
 
   const topIsYou = gameMode === "online" && myColor === topColor;
   const bottomIsYou = gameMode === "online" && myColor === bottomColor;
+
+  // ---- Inactivity status: who is stalling? ----
+  const stallingColor = inactivityRemaining !== null ? turn : null;
+  const isOpponentStalling = gameMode === "online" && stallingColor !== null && stallingColor !== myColor;
+  const isYouStalling = gameMode === "online" && stallingColor !== null && stallingColor === myColor;
 
   if (gameMode === "online" && gameStatus === "waiting") {
     return (
@@ -716,6 +769,16 @@ export default function ChessBoard({
         </div>
       </div>
 
+      {/* ---- Inactivity Warning (opponent stalling) ---- */}
+      {isOpponentStalling && inactivityRemaining !== null && (
+        <div className="inactivity-status inactivity-opponent">
+          <span className="inactivity-icon">⏳</span>
+          <span className="inactivity-text">
+            Opponent inactive — auto-abort in <strong>{formatInactivityTime(inactivityRemaining)}</strong>
+          </span>
+        </div>
+      )}
+
       {/* ---- Chess Board ---- */}
       <div className="board-area">
         {isViewingHistory && (
@@ -763,6 +826,16 @@ export default function ChessBoard({
           </div>
         </div>
       </div>
+
+      {/* ---- Inactivity Warning (you are stalling) ---- */}
+      {isYouStalling && inactivityRemaining !== null && (
+        <div className="inactivity-status inactivity-self">
+          <span className="inactivity-icon">⚠️</span>
+          <span className="inactivity-text">
+            Make a move! Auto-abort in <strong>{formatInactivityTime(inactivityRemaining)}</strong>
+          </span>
+        </div>
+      )}
 
       {/* ---- Bottom Player Bar (You / White) ---- */}
       <div className="player-bar my-bar">
