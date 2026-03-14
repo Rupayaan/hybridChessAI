@@ -372,6 +372,26 @@ $rank-label-width: 20px;
   &.highlight {
     cursor: pointer;
   }
+  
+  // Last move: "from" square — lighter highlight
+  &.last-move-from {
+    &.light {
+      background-color: #cdd26a;
+    }
+    &.dark {
+      background-color: #aaa23a;
+    }
+  }
+
+  // Last move: "to" square — darker/stronger highlight
+  &.last-move-to {
+    &.light {
+      background-color: #bbc034;
+    }
+    &.dark {
+      background-color: #98a328;
+    }
+  }
 }
 
 .piece {
@@ -525,7 +545,7 @@ $rank-label-width: 20px;
   max-width: 360px;
   width: 90%;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-
+  position: relative;
   .gameover-icon {
     font-size: 3rem;
     margin-bottom: 0.75rem;
@@ -552,6 +572,38 @@ $rank-label-width: 20px;
       background: rgba(255, 215, 0, 0.3);
       transform: scale(1.05);
     }
+  }
+  .gameover-close {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: rgba(255, 255, 255, 0.7);
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    font-size: 0.85rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    padding: 0;
+    line-height: 1;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.2);
+      color: white;
+      transform: scale(1.1);
+    }
+  }
+
+  .gameover-hint {
+    font-size: 0.7rem;
+    color: rgba(255, 255, 255, 0.4);
+    margin: 0.25rem 0 0.75rem;
+    font-style: italic;
   }
 }
 
@@ -871,7 +923,25 @@ $rank-label-width: 20px;
   }
 }
 
+.island-btn.exit-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.25);
+  font-size: 1.1rem;
 
+  &:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+}
+.player-bar-timer.timer-disabled {
+  opacity: 0.4;
+  font-size: 1.1rem;
+  letter-spacing: 2px;
+
+  &.active {
+    background: rgba(255, 255, 255, 0.03);
+    box-shadow: none;
+  }
+}
 // ---- Very small screens (iPhone SE, etc.) ----
 @media (max-height: 600px) {
   .chess-container {

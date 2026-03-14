@@ -104,6 +104,8 @@ board = create_initial_board()
 turn = "white"
 last_move = None
 last_move_notation = None
+last_move_from = None
+last_move_to = None
 castling_rights = {
     "white_kingside": True,
     "white_queenside": True,
@@ -332,7 +334,7 @@ def execute_move_on_board(b, from_row, from_col, to_row, to_col,
 
 # ---- Global execute_move wrapper (for bot/local) ----
 def execute_move(from_row, from_col, to_row, to_col, promotion=None):
-    global turn, last_move, last_move_notation
+    global turn, last_move, last_move_notation, last_move_from, last_move_to
 
     color = turn
     notation, new_last_move = execute_move_on_board(
@@ -343,6 +345,8 @@ def execute_move(from_row, from_col, to_row, to_col, promotion=None):
     )
     last_move = new_last_move
     last_move_notation = notation
+    last_move_from = [from_row, from_col]
+    last_move_to = [to_row, to_col]
     turn = "black" if turn == "white" else "white"
 
 def build_response():
@@ -354,17 +358,21 @@ def build_response():
         "lastMove": last_move_notation,
         "capturedByWhite": captured_to_frontend(captured_by_white),
         "capturedByBlack": captured_to_frontend(captured_by_black),
+        "from": last_move_from,
+        "to": last_move_to,
     }
 
 # ---- API Endpoints (bot/local) ----
 
 @app.post("/api/reset")
 def reset_board():
-    global board, turn, last_move, last_move_notation, castling_rights, captured_by_white, captured_by_black
+    global board, turn, last_move, last_move_notation, castling_rights, captured_by_white, captured_by_black, last_move_from, last_move_to
     board = create_initial_board()
     turn = "white"
     last_move = None
     last_move_notation = None
+    last_move_from = None
+    last_move_to = None
     castling_rights = {
         "white_kingside": True,
         "white_queenside": True,
@@ -380,6 +388,8 @@ def reset_board():
         "lastMove": None,
         "capturedByWhite": [],
         "capturedByBlack": [],
+        "from": None,
+        "to": None,
     }
 
 @app.post("/api/legal-moves")
@@ -411,9 +421,7 @@ def bot_play():
 
     from_row, from_col, to_row, to_col = move
     execute_move(from_row, from_col, to_row, to_col)
-    response = build_response()
-    response["increment"] = 0
-    return response
+    return build_response()
 
 # ---- Online Mode REST Endpoints ----
 
@@ -598,6 +606,8 @@ async def handle_online_move(room: GameRoom, ws: WebSocket, data: dict):
         "capturedByWhite": captured_to_frontend(room.captured_by_white),
         "capturedByBlack": captured_to_frontend(room.captured_by_black),
         "increment": room.increment,
+        "from": [from_row, from_col],
+        "to": [to_row, to_col],
     }
 
     if status == "checkmate" or status == "stalemate":
