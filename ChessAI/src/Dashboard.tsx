@@ -2,12 +2,15 @@ import { useState } from "react";
 import type { GameMode, GameState, TimeControl } from "./types";
 import { TIME_CONTROLS } from "./types";
 import "./Dashboard.scss";
-const API_BASE = import.meta.env.VITE_API_URL || "";
+
+const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+
 interface DashboardProps {
   onStartGame: (mode: GameMode, timeControl: TimeControl, roomData?: { roomId: string; roomCode: string; color: string }) => void;
 }
 
 type OnlineStep = "choose" | "create-timer" | "waiting" | "join";
+type ColorChoice = "white" | "black" | "random";
 
 export default function Dashboard({ onStartGame }: DashboardProps) {
   const [gameState, setGameState] = useState<GameState>("dashboard");
@@ -16,17 +19,17 @@ export default function Dashboard({ onStartGame }: DashboardProps) {
   const [customMinutes, setCustomMinutes] = useState(10);
   const [customIncrement, setCustomIncrement] = useState(0);
 
-  // Online mode state
   const [onlineStep, setOnlineStep] = useState<OnlineStep>("choose");
   const [joinCode, setJoinCode] = useState("");
   const [onlineError, setOnlineError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [colorChoice, setColorChoice] = useState<ColorChoice>("white");
 
   const handleModeSelect = (mode: GameMode) => {
     setSelectedMode(mode);
     if (mode === "online") {
       setOnlineStep("choose");
-      setGameState("timer-selection"); // Reuse the state
+      setGameState("timer-selection");
     } else {
       setGameState("timer-selection");
     }
@@ -66,23 +69,22 @@ export default function Dashboard({ onStartGame }: DashboardProps) {
         body: JSON.stringify({
           minutes: timeControl.minutes,
           increment: timeControl.increment,
+          color: colorChoice,
         }),
       });
       const data = await res.json();
 
-      // Start game immediately — the ChessBoard will handle WebSocket waiting
       onStartGame("online", timeControl, {
         roomId: data.room_id,
         roomCode: data.room_code,
-        color: "white",
+        color: data.creator_color,
       });
-    } catch (err) {
+    } catch {
       setOnlineError("Failed to create room. Is the server running?");
     } finally {
       setIsLoading(false);
     }
   };
-
 
   const handleJoinRoom = async () => {
     if (!joinCode.trim()) {
@@ -115,9 +117,9 @@ export default function Dashboard({ onStartGame }: DashboardProps) {
       onStartGame("online", timeControl, {
         roomId: data.room_id,
         roomCode: data.room_code,
-        color: "black",
+        color: data.joiner_color,
       });
-    } catch (err) {
+    } catch {
       setOnlineError("Failed to join room. Check the code and try again.");
     } finally {
       setIsLoading(false);
@@ -145,7 +147,7 @@ export default function Dashboard({ onStartGame }: DashboardProps) {
     }
   };
 
-  // ---- Dashboard View ----
+  // ---- Dashboard Screen ----
   if (gameState === "dashboard") {
     return (
       <div className="dashboard">
@@ -182,14 +184,12 @@ export default function Dashboard({ onStartGame }: DashboardProps) {
           <button className="back-button" onClick={handleBack}>← Back</button>
           <h2 className="timer-title">Online Game</h2>
           <p className="timer-subtitle">Create a new game or join an existing one</p>
-
           <div className="online-choice">
             <button className="online-choice-card" onClick={() => setOnlineStep("create-timer")}>
               <div className="online-choice-icon">🏠</div>
               <h3>Create Room</h3>
               <p>Choose time control and get a code to share</p>
             </button>
-
             <button className="online-choice-card" onClick={() => setOnlineStep("join")}>
               <div className="online-choice-icon">🚪</div>
               <h3>Join Room</h3>
@@ -201,7 +201,7 @@ export default function Dashboard({ onStartGame }: DashboardProps) {
     );
   }
 
-  // ---- Online: Join Room ----
+  // ---- Online: Join Screen ----
   if (selectedMode === "online" && onlineStep === "join") {
     return (
       <div className="timer-selection">
@@ -209,7 +209,6 @@ export default function Dashboard({ onStartGame }: DashboardProps) {
           <button className="back-button" onClick={handleBack}>← Back</button>
           <h2 className="timer-title">Join Game</h2>
           <p className="timer-subtitle">Enter the room code</p>
-
           <div className="join-panel">
             <input
               type="text"
@@ -220,11 +219,7 @@ export default function Dashboard({ onStartGame }: DashboardProps) {
               maxLength={6}
             />
             {onlineError && <p className="online-error">{onlineError}</p>}
-            <button
-              className="join-button"
-              onClick={handleJoinRoom}
-              disabled={isLoading}
-            >
+            <button className="join-button" onClick={handleJoinRoom} disabled={isLoading}>
               {isLoading ? "Joining..." : "Join Game"}
             </button>
           </div>
@@ -233,7 +228,7 @@ export default function Dashboard({ onStartGame }: DashboardProps) {
     );
   }
 
-  // ---- Timer Selection (Bot, Local, or Online Create) ----
+  // ---- Timer Selection (bot/local/online-create) ----
   if (gameState === "timer-selection") {
     return (
       <div className="timer-selection">
@@ -241,6 +236,39 @@ export default function Dashboard({ onStartGame }: DashboardProps) {
           <button className="back-button" onClick={handleBack}>← Back</button>
           <h2 className="timer-title">Select Time Control</h2>
           <p className="timer-subtitle">{getModeLabel()}</p>
+
+          {/* Color Picker — Online only */}
+          {selectedMode === "online" && (
+            <div className="color-picker">
+              <p className="color-picker-label">Play as</p>
+              <div className="color-picker-options">
+                <button
+                  className={`color-option ${colorChoice === "white" ? "active" : ""}`}
+                  onClick={() => setColorChoice("white")}
+                  title="Play as White"
+                >
+                  <span className="color-piece">♔</span>
+                  <span className="color-text">White</span>
+                </button>
+                <button
+                  className={`color-option ${colorChoice === "random" ? "active" : ""}`}
+                  onClick={() => setColorChoice("random")}
+                  title="Random Color"
+                >
+                  <span className="color-piece">🎲</span>
+                  <span className="color-text">Random</span>
+                </button>
+                <button
+                  className={`color-option ${colorChoice === "black" ? "active" : ""}`}
+                  onClick={() => setColorChoice("black")}
+                  title="Play as Black"
+                >
+                  <span className="color-piece">♚</span>
+                  <span className="color-text">Black</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           {onlineError && <p className="online-error">{onlineError}</p>}
 
@@ -265,7 +293,6 @@ export default function Dashboard({ onStartGame }: DashboardProps) {
                 </div>
               </button>
             ))}
-
             <button
               className="timer-card timer-card--custom"
               onClick={() => setShowCustomTimer(!showCustomTimer)}

@@ -40,6 +40,8 @@ export default function ChessBoard({
   const [capturedByBlack, setCapturedByBlack] = useState<Piece[]>([]);
   const [showForfeitDialog, setShowForfeitDialog] = useState(false);
   const [forfeitWinner, setForfeitWinner] = useState<string | null>(null);
+  const [boardHistory, setBoardHistory] = useState<(Piece | null)[][][]>([]);
+  const [viewingIndex, setViewingIndex] = useState<number>(-1);
 
   const [myColor, setMyColor] = useState<"white" | "black">(
     (roomData?.color as "white" | "black") || "white"
@@ -47,6 +49,26 @@ export default function ChessBoard({
   const onlineRoomCode = roomData?.roomCode || "";
   const wsRef = useRef<WebSocket | null>(null);
   const botThinkingRef = useRef(false);
+
+  // Board orientation: flip when playing as black in online mode
+  const isFlipped = gameMode === "online" && myColor === "black";
+
+  // ---- Board orientation helpers ----
+  const toRealRow = (displayRow: number): number => isFlipped ? 7 - displayRow : displayRow;
+  const toRealCol = (displayCol: number): number => isFlipped ? 7 - displayCol : displayCol;
+
+  const fileLabels = isFlipped
+    ? ["h", "g", "f", "e", "d", "c", "b", "a"]
+    : ["a", "b", "c", "d", "e", "f", "g", "h"];
+
+  const rankLabels = isFlipped
+    ? [1, 2, 3, 4, 5, 6, 7, 8]
+    : [8, 7, 6, 5, 4, 3, 2, 1];
+
+  const getDisplayBoard = (b: (Piece | null)[][]): (Piece | null)[][] => {
+    if (!isFlipped || b.length === 0) return b;
+    return [...b].reverse().map((row) => [...row].reverse());
+  };
 
   // ---- Online Mode: WebSocket Connection ----
   useEffect(() => {
@@ -79,6 +101,8 @@ export default function ChessBoard({
           setBlackTime(data.black_time);
           setGameStatus("playing");
           setGameReady(true);
+          setBoardHistory([data.board.map((row: (Piece | null)[]) => [...row])]);
+          setViewingIndex(-1);
           break;
 
         case "move_made":
@@ -90,7 +114,8 @@ export default function ChessBoard({
           setCapturedByBlack(data.capturedByBlack || []);
           setSelected(null);
           setLegalMoves([]);
-          // Apply increment to the player who just moved
+          setBoardHistory((prev) => [...prev, data.board.map((row: (Piece | null)[]) => [...row])]);
+          setViewingIndex(-1);
           if (data.increment && data.increment > 0) {
             const moverColor = data.turn === "white" ? "black" : "white";
             if (moverColor === "white") {
@@ -104,7 +129,7 @@ export default function ChessBoard({
         case "game_over":
           if (data.board) setBoard(data.board);
           setGameStatus(
-            data.reason === "forfeit"
+            data.reason === "forfeit" || data.reason === "disconnect" || data.reason === "inactivity" || data.reason === "abort"
               ? "forfeit"
               : data.reason === "timeout"
                 ? "timeout"
@@ -165,6 +190,8 @@ export default function ChessBoard({
         setCapturedByBlack([]);
         setShowForfeitDialog(false);
         setForfeitWinner(null);
+        setBoardHistory([data.board.map((row: (Piece | null)[]) => [...row])]);
+        setViewingIndex(-1);
         setGameReady(true);
       } catch (error) {
         console.error("Failed to initialize game:", error);
@@ -185,10 +212,7 @@ export default function ChessBoard({
         setWhiteTime((prev) => {
           if (prev <= 1) {
             if (gameMode === "online" && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-              wsRef.current.send(JSON.stringify({
-                type: "timeout",
-                winner: "black",
-              }));
+              wsRef.current.send(JSON.stringify({ type: "timeout", winner: "black" }));
             }
             setGameStatus("timeout");
             return 0;
@@ -199,10 +223,7 @@ export default function ChessBoard({
         setBlackTime((prev) => {
           if (prev <= 1) {
             if (gameMode === "online" && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-              wsRef.current.send(JSON.stringify({
-                type: "timeout",
-                winner: "white",
-              }));
+              wsRef.current.send(JSON.stringify({ type: "timeout", winner: "white" }));
             }
             setGameStatus("timeout");
             return 0;
@@ -260,13 +281,15 @@ export default function ChessBoard({
     if (data.lastMove !== undefined) setLastMoveNotation(data.lastMove);
     if (data.capturedByWhite) setCapturedByWhite(data.capturedByWhite);
     if (data.capturedByBlack) setCapturedByBlack(data.capturedByBlack);
+
+    setBoardHistory((prev) => [...prev, data.board.map((row: (Piece | null)[]) => [...row])]);
+    setViewingIndex(-1);
   };
 
   const isGameOver = () => {
     return ["checkmate", "stalemate", "timeout", "forfeit"].includes(gameStatus);
   };
 
-  // ---- Legal Moves (bot + local) ----
   const fetchLegalMoves = useCallback(async (row: number, col: number) => {
     try {
       const res = await fetch(`${API_BASE}/api/legal-moves`, {
@@ -285,7 +308,6 @@ export default function ChessBoard({
     }
   }, []);
 
-  // ---- Legal Moves (online — room-aware) ----
   const fetchRoomLegalMoves = useCallback(async (row: number, col: number) => {
     if (!roomData) return;
     try {
@@ -305,7 +327,6 @@ export default function ChessBoard({
     }
   }, [roomData]);
 
-  // ---- Move Piece ----
   const movePiece = useCallback(
     async (row: number, col: number) => {
       if (!selected) return;
@@ -359,11 +380,15 @@ export default function ChessBoard({
     [selected, timeControl.increment, gameMode]
   );
 
-  // ---- Square Click Handler ----
-  const handleSquareClick = (row: number, col: number) => {
+  const handleSquareClick = (displayRow: number, displayCol: number) => {
     if (isGameOver()) return;
     if (gameStatus === "waiting") return;
     if (botThinking) return;
+    if (isViewingHistory) return;
+
+    // Convert display coordinates to real board coordinates
+    const row = toRealRow(displayRow);
+    const col = toRealCol(displayCol);
 
     const piece = board[row]?.[col];
 
@@ -389,7 +414,6 @@ export default function ChessBoard({
     setLegalMoves([]);
   };
 
-  // ---- Forfeit / Back ----
   const handleBackClick = () => {
     if (isGameOver()) {
       if (gameMode === "online" && wsRef.current) {
@@ -416,6 +440,37 @@ export default function ChessBoard({
   const handleForfeitCancel = () => {
     setShowForfeitDialog(false);
   };
+
+  // ---- Move Navigation ----
+  const isViewingHistory = viewingIndex >= 0 && viewingIndex < boardHistory.length - 1;
+
+  const goToPreviousMove = () => {
+    if (boardHistory.length <= 1) return;
+
+    if (viewingIndex === -1) {
+      setViewingIndex(boardHistory.length - 2);
+    } else if (viewingIndex > 0) {
+      setViewingIndex(viewingIndex - 1);
+    }
+  };
+
+  const goToNextMove = () => {
+    if (viewingIndex === -1) return;
+
+    if (viewingIndex >= boardHistory.length - 2) {
+      setViewingIndex(-1);
+    } else {
+      setViewingIndex(viewingIndex + 1);
+    }
+  };
+
+  const goToLiveBoard = () => {
+    setViewingIndex(-1);
+  };
+
+  // The board to display — either historical or live, then apply flip
+  const rawDisplayBoard = viewingIndex >= 0 ? boardHistory[viewingIndex] : board;
+  const displayBoard = getDisplayBoard(rawDisplayBoard);
 
   const handleExitAfterGameOver = () => {
     if (gameMode === "online" && wsRef.current) {
@@ -452,7 +507,7 @@ export default function ChessBoard({
   const getBlackStatusText = () => {
     if (gameStatus === "waiting") return "Waiting...";
     if (turn === "black" && !botThinking) return "Playing...";
-    if (lastMoveNotation && turn === "white") return `Last move: ${lastMoveNotation}`;
+    if (lastMoveNotation && turn === "white") return `${lastMoveNotation}`;
     if (botThinking) return "Thinking...";
     return "Waiting";
   };
@@ -460,7 +515,7 @@ export default function ChessBoard({
   const getWhiteStatusText = () => {
     if (gameStatus === "waiting") return "Waiting...";
     if (turn === "white") return "Playing...";
-    if (lastMoveNotation && turn === "black") return `Last move: ${lastMoveNotation}`;
+    if (lastMoveNotation && turn === "black") return `${lastMoveNotation}`;
     return "Waiting";
   };
 
@@ -480,6 +535,91 @@ export default function ChessBoard({
     );
   }
 
+  const findKingPositions = () => {
+    const kings: { white: { row: number; col: number } | null; black: { row: number; col: number } | null } = {
+      white: null,
+      black: null,
+    };
+    for (let r = 0; r < board.length; r++) {
+      for (let c = 0; c < (board[r]?.length || 0); c++) {
+        const piece = board[r][c];
+        if (piece && piece.type === "king") {
+          if (piece.color === "white") kings.white = { row: r, col: c };
+          else kings.black = { row: r, col: c };
+        }
+      }
+    }
+    return kings;
+  };
+
+  const getSquareHighlight = (realRow: number, realCol: number): string => {
+    const kings = findKingPositions();
+
+    if (gameStatus === "checkmate") {
+      const loserColor = turn;
+      const winnerColor = turn === "white" ? "black" : "white";
+
+      if (kings[winnerColor] && kings[winnerColor]!.row === realRow && kings[winnerColor]!.col === realCol) {
+        return " king-winner";
+      }
+      if (kings[loserColor] && kings[loserColor]!.row === realRow && kings[loserColor]!.col === realCol) {
+        return " king-loser";
+      }
+    }
+
+    if (gameStatus === "stalemate") {
+      if (
+        (kings.white && kings.white.row === realRow && kings.white.col === realCol) ||
+        (kings.black && kings.black.row === realRow && kings.black.col === realCol)
+      ) {
+        return " king-stalemate";
+      }
+    }
+
+    if (gameStatus === "check") {
+      const checkedKing = kings[turn as "white" | "black"];
+      if (checkedKing && checkedKing.row === realRow && checkedKing.col === realCol) {
+        return " king-check";
+      }
+    }
+
+    if (gameStatus === "timeout" || gameStatus === "forfeit") {
+      const winnerStr = forfeitWinner?.toLowerCase();
+      if (winnerStr === "white" || winnerStr === "black") {
+        const loserStr = winnerStr === "white" ? "black" : "white";
+        if (kings[winnerStr] && kings[winnerStr]!.row === realRow && kings[winnerStr]!.col === realCol) {
+          return " king-winner";
+        }
+        if (kings[loserStr] && kings[loserStr]!.row === realRow && kings[loserStr]!.col === realCol) {
+          return " king-loser";
+        }
+      }
+    }
+
+    return "";
+  };
+
+  // ---- Determine top/bottom player based on orientation ----
+  // Bottom player = "you" in online, white in bot/local
+  // Top player = opponent
+  const bottomColor: "white" | "black" = isFlipped ? "black" : "white";
+  const topColor: "white" | "black" = isFlipped ? "white" : "black";
+
+  const getTopStatusText = () => topColor === "black" ? getBlackStatusText() : getWhiteStatusText();
+  const getBottomStatusText = () => bottomColor === "black" ? getBlackStatusText() : getWhiteStatusText();
+
+  const topTime = topColor === "black" ? blackTime : whiteTime;
+  const bottomTime = bottomColor === "black" ? blackTime : whiteTime;
+
+  const topCaptured = topColor === "black" ? capturedByBlack : capturedByWhite;
+  const bottomCaptured = bottomColor === "black" ? capturedByBlack : capturedByWhite;
+
+  const topLabel = topColor === "black" ? "⬛ Black" : "⬜ White";
+  const bottomLabel = bottomColor === "black" ? "⬛ Black" : "⬜ White";
+
+  const topIsYou = gameMode === "online" && myColor === topColor;
+  const bottomIsYou = gameMode === "online" && myColor === bottomColor;
+
   if (gameMode === "online" && gameStatus === "waiting") {
     return (
       <div className="chess-container">
@@ -490,6 +630,9 @@ export default function ChessBoard({
           <div className="room-code-display">{onlineRoomCode}</div>
           <p className="waiting-hint">
             They should select <strong>Online → Join Room</strong> and enter this code
+          </p>
+          <p className="waiting-color-hint">
+            You are playing as <strong>{myColor === "white" ? "⬜ White" : "⬛ Black"}</strong>
           </p>
           <button className="waiting-cancel" onClick={onBackToDashboard}>
             Cancel
@@ -536,6 +679,7 @@ export default function ChessBoard({
         </div>
       )}
 
+      {/* ---- Top Bar: Back + Game Info ---- */}
       <div className="game-header">
         <button className="back-button" onClick={handleBackClick}>← Back</button>
         <div className="game-info">
@@ -552,21 +696,55 @@ export default function ChessBoard({
         </div>
       </div>
 
-      <div className="game-layout">
-        <div className="board-wrapper">
-          <div className="board">
-            {board.map((boardRow, rowIndex) =>
-              boardRow.map((piece, colIndex) => {
-                const isLight = (rowIndex + colIndex) % 2 === 0;
-                const isSelected = selected?.row === rowIndex && selected?.col === colIndex;
-                const isLegalMove = legalMoves.some((m) => m.row === rowIndex && m.col === colIndex);
+      {/* ---- Top Player Bar (Opponent) ---- */}
+      <div className="player-bar opponent-bar">
+        <div className="player-bar-top">
+          <div className="player-bar-info">
+            <span className="player-bar-label">
+              {topLabel} {topIsYou ? "(You)" : ""}
+            </span>
+            <span className="player-bar-status">{getTopStatusText()}</span>
+          </div>
+          <div className={`player-bar-timer ${turn === topColor && !isGameOver() ? "active" : ""}`}>
+            {formatTime(topTime)}
+          </div>
+        </div>
+        <div className="player-bar-captured">
+          {sortCaptured(topCaptured).map((p, i) => (
+            <img key={i} src={p.sprite} alt={p.type} className="captured-piece-sm" />
+          ))}
+        </div>
+      </div>
+
+      {/* ---- Chess Board ---- */}
+      <div className="board-area">
+        {isViewingHistory && (
+          <div className="history-banner" onClick={goToLiveBoard}>
+            Viewing move {viewingIndex + 1}/{boardHistory.length - 1} — Tap to return to live
+          </div>
+        )}
+        <div className="rank-labels">
+          {rankLabels.map((r) => (
+            <span key={r}>{r}</span>
+          ))}
+        </div>
+        <div className="board-and-files">
+          <div className={`board ${isViewingHistory ? "viewing-history" : ""}`}>
+            {displayBoard.map((boardRow, displayRowIndex) =>
+              boardRow.map((piece, displayColIndex) => {
+                const realRow = toRealRow(displayRowIndex);
+                const realCol = toRealCol(displayColIndex);
+                const isLight = (realRow + realCol) % 2 === 0;
+                const isSelected = !isViewingHistory && selected?.row === realRow && selected?.col === realCol;
+                const isLegalMove = !isViewingHistory && legalMoves.some((m) => m.row === realRow && m.col === realCol);
                 const isCapture = isLegalMove && piece !== null;
+                const kingHighlight = getSquareHighlight(realRow, realCol);
 
                 return (
                   <div
-                    key={`${rowIndex}-${colIndex}`}
-                    className={`square ${isLight ? "light" : "dark"} ${isSelected ? "selected" : ""} ${isLegalMove ? "highlight" : ""}`}
-                    onClick={() => handleSquareClick(rowIndex, colIndex)}
+                    key={`${displayRowIndex}-${displayColIndex}`}
+                    className={`square ${isLight ? "light" : "dark"} ${isSelected ? "selected" : ""} ${isLegalMove ? "highlight" : ""}${kingHighlight}`}
+                    onClick={() => handleSquareClick(displayRowIndex, displayColIndex)}
                   >
                     {piece && (
                       <img src={piece.sprite} alt={piece.type} className="piece" draggable={false} />
@@ -579,64 +757,67 @@ export default function ChessBoard({
             )}
           </div>
           <div className="file-labels">
-            {["a", "b", "c", "d", "e", "f", "g", "h"].map((f) => (
+            {fileLabels.map((f) => (
               <span key={f}>{f}</span>
             ))}
           </div>
-          <div className="rank-labels">
-            {[8, 7, 6, 5, 4, 3, 2, 1].map((r) => (
-              <span key={r}>{r}</span>
-            ))}
+        </div>
+      </div>
+
+      {/* ---- Bottom Player Bar (You / White) ---- */}
+      <div className="player-bar my-bar">
+        <div className="player-bar-top">
+          <div className="player-bar-info">
+            <span className="player-bar-label">
+              {bottomLabel} {bottomIsYou ? "(You)" : ""}
+            </span>
+            <span className="player-bar-status">{getBottomStatusText()}</span>
+          </div>
+          <div className={`player-bar-timer ${turn === bottomColor && !isGameOver() ? "active" : ""}`}>
+            {formatTime(bottomTime)}
           </div>
         </div>
+        <div className="player-bar-captured">
+          {sortCaptured(bottomCaptured).map((p, i) => (
+            <img key={i} src={p.sprite} alt={p.type} className="captured-piece-sm" />
+          ))}
+        </div>
+      </div>
 
-        <div className="side-panel">
-          <div className="player-panel black-panel">
-            <div className={`player-timer ${turn === "black" && !isGameOver() ? "active" : ""}`}>
-              <span className="player-label">⬛ Black {gameMode === "online" && myColor === "black" ? "(You)" : ""}</span>
-              <span className="player-time">{formatTime(blackTime)}</span>
-            </div>
-            <div className="player-status"><span>{getBlackStatusText()}</span></div>
-          </div>
+      {/* ---- Mobile Button Island ---- */}
+      <div className="button-island">
+        <button
+          className="island-btn forfeit-btn"
+          onClick={handleBackClick}
+          title="Forfeit"
+        >
+          🏳️
+        </button>
 
-          <div className="captured-section">
-            <div className="captured-label">Captured by Black</div>
-            <div className="captured-pieces">
-              {sortCaptured(capturedByBlack).length > 0 ? (
-                sortCaptured(capturedByBlack).map((p, i) => (
-                  <img key={i} src={p.sprite} alt={p.type} className="captured-piece" />
-                ))
-              ) : (
-                <span className="no-captures">—</span>
-              )}
-            </div>
-          </div>
+        <div className="island-center">
+          <button className="island-btn disabled" title="More options">
+            ⋯
+          </button>
+          <button className="island-btn disabled" title="Chat">
+            💬
+          </button>
+        </div>
 
-          <div className="game-status-box">
-            <div className="status-label">Game Status</div>
-            <div className="status-text">{getStatusText()}</div>
-          </div>
-
-          <div className="captured-section">
-            <div className="captured-label">Captured by White</div>
-            <div className="captured-pieces">
-              {sortCaptured(capturedByWhite).length > 0 ? (
-                sortCaptured(capturedByWhite).map((p, i) => (
-                  <img key={i} src={p.sprite} alt={p.type} className="captured-piece" />
-                ))
-              ) : (
-                <span className="no-captures">—</span>
-              )}
-            </div>
-          </div>
-
-          <div className="player-panel white-panel">
-            <div className={`player-timer ${turn === "white" && !isGameOver() ? "active" : ""}`}>
-              <span className="player-label">⬜ White {gameMode === "online" && myColor === "white" ? "(You)" : ""}</span>
-              <span className="player-time">{formatTime(whiteTime)}</span>
-            </div>
-            <div className="player-status"><span>{getWhiteStatusText()}</span></div>
-          </div>
+        <div className="island-arrows">
+          <button
+            className={`island-btn ${viewingIndex === 0 || boardHistory.length <= 1 ? "disabled" : ""}`}
+            onClick={goToPreviousMove}
+            title="Previous move"
+          >
+            ◀
+          </button>
+          <button
+            className={`island-btn ${viewingIndex === -1 ? "disabled" : ""}`}
+            onClick={goToNextMove}
+            title="Next move"
+          >
+            ▶
+          </button>
         </div>
       </div>
     </div>
